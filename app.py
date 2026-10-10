@@ -219,6 +219,36 @@ async def upload(
                 result["reel_error"] = graph_error(r)
         return result
 
+# ---------- photo post ----------
+@app.post("/photo")
+async def photo(
+    page_id: str = Form(...),
+    image: UploadFile = File(...),
+    caption: str = Form(""),
+    scheduled_time: Optional[int] = Form(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    check_key(x_api_key)
+    token = page_token(page_id)
+    data = await image.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image file")
+    ctype = image.content_type or "image/jpeg"
+    if not ctype.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File is not an image")
+    params = {"caption": caption, "access_token": token}
+    if scheduled_time:
+        params["published"] = "false"
+        params["scheduled_publish_time"] = str(scheduled_time)
+    async with httpx.AsyncClient(timeout=120) as c:
+        r = await c.post(
+            f"{GRAPH}/{page_id}/photos",
+            params=params,
+            files={"source": ("photo.jpg", data, ctype)},
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=graph_error(r))
+    return {"photo_id": r.json().get("id"), "post_id": r.json().get("post_id")}
 
 # ---------- AI reply drafting ----------
 class DraftReq(BaseModel):
