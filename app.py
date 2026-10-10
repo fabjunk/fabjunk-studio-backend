@@ -205,7 +205,7 @@ async def upload_video(page_id: str, token: str, data: bytes, caption: str, sche
             r = await c.post(
                 f"{GRAPH}/{video_id}",
                 params={"upload_phase": "transfer", "start_offset": str(offset), "access_token": token},
-                files={"video_file_chunk": ("chunk.mp4", piece, "video/mp4")},
+                files={"source": ("chunk.mp4", piece, "video/mp4")},
             )
             if r.status_code != 200:
                 raise HTTPException(status_code=502, detail=graph_error(r))
