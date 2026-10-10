@@ -155,7 +155,7 @@ async def scheduled(page_id: str, x_api_key: Optional[str] = Header(None)):
     return {"scheduled": out}
 
 
-# ---------- video upload (resumable) ----------
+# ---------- video upload ----------
 @app.post("/upload")
 async def upload(
     page_id: str = Form(...),
@@ -171,6 +171,13 @@ async def upload(
     if not data:
         raise HTTPException(status_code=400, detail="Empty video file")
 
+    if as_reel.lower() == "true":
+        return await upload_reel(page_id, token, data, caption, scheduled_time)
+    return await upload_video(page_id, token, data, caption, scheduled_time)
+
+
+async def upload_video(page_id: str, token: str, data: bytes, caption: str, scheduled_time: Optional[int]):
+    """Regular feed video via the /videos resumable upload (chunked)."""
     async with httpx.AsyncClient(timeout=600) as c:
         # 1. start
         start_params = {
@@ -214,18 +221,78 @@ async def upload(
         )
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=graph_error(r))
+        return {"video_id": video_id}
 
-        result = {"video_id": video_id, "reel_id": None}
-        if as_reel.lower() == "true":
+
+async def upload_reel(page_id: str, token: str, data: bytes, caption: str, scheduled_time: Optional[int]):
+    """Facebook Reel via the official video_reels publishing API."""
+    async with httpx.AsyncClient(timeout=600) as c:
+        # 1. start reels session
+        r = await c.post(
+            f"{GRAPH}/{page_id}/video_reels",
+            params={"upload_phase": "start", "access_token": token},
+        )
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=graph_error(r))
+        j = r.json()
+        video_id, upload_url = j.get("video_id"), j.get("upload_url")
+        if not video_id or not upload_url:
+            raise HTTPException(status_code=502, detail="Reels start returned no video_id/upload_url")
+
+        # 2. transfer chunks to the reels upload URL
+        CHUNK = 8 * 1024 * 1024
+        size, offset = len(data), 0
+        while offset < size:
+            piece = data[offset:offset + CHUNK]
             r = await c.post(
-                f"{GRAPH}/{page_id}/video_reels",
-                params={"video_id": video_id, "access_token": token},
+                upload_url,
+                headers={
+                    "Authorization": f"OAuth {token}",
+                    "offset": str(offset),
+                    "file_size": str(size),
+                },
+                content=piece,
             )
-            if r.status_code == 200:
-                result["reel_id"] = r.json().get("id")
-            else:
-                result["reel_error"] = graph_error(r)
-        return result
+            if r.status_code not in (200, 201):
+                raise HTTPException(status_code=502, detail=graph_error(r))
+            try:
+                offset = int(r.json().get("offset", offset + len(piece)))
+            except Exception:
+                offset += len(piece)
+
+        # 3. finish (publish now or schedule)
+        finish_params = {
+            "upload_phase": "finish",
+            "video_id": video_id,
+            "access_token": token,
+            "description": caption or "",
+        }
+        if scheduled_time:
+            finish_params["video_state"] = "SCHEDULED"
+            finish_params["scheduled_publish_time"] = str(scheduled_time)
+        else:
+            finish_params["video_state"] = "PUBLISHED"
+        r = await c.post(f"{GRAPH}/{page_id}/video_reels", params=finish_params)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=graph_error(r))
+        return {"video_id": video_id, "reel": True, "scheduled": bool(scheduled_time)}
+
+
+# ---------- delete a video (cleanup) ----------
+@app.post("/delete_video")
+async def delete_video(
+    page_id: str = Form(...),
+    video_id: str = Form(...),
+    x_api_key: Optional[str] = Header(None),
+):
+    check_key(x_api_key)
+    token = page_token(page_id)
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.delete(f"{GRAPH}/{video_id}", params={"access_token": token})
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=graph_error(r))
+    return {"deleted": True, "video_id": video_id}
+
 
 # ---------- photo post ----------
 @app.post("/photo")
