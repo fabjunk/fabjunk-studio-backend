@@ -127,6 +127,34 @@ async def comments(
     return {"comments": out}
 
 
+# ---------- scheduled (unpublished) posts ----------
+@app.get("/scheduled")
+async def scheduled(page_id: str, x_api_key: Optional[str] = Header(None)):
+    check_key(x_api_key)
+    token = page_token(page_id)
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.get(
+            f"{GRAPH}/{page_id}/scheduled_posts",
+            params={
+                "fields": "id,message,created_time,scheduled_publish_time",
+                "access_token": token,
+            },
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=graph_error(r))
+    out = []
+    for p in r.json().get("data", []):
+        out.append(
+            {
+                "id": p["id"],
+                "caption": (p.get("message") or "")[:120],
+                "created_time": p.get("created_time", ""),
+                "scheduled_publish_time": p.get("scheduled_publish_time", ""),
+            }
+        )
+    return {"scheduled": out}
+
+
 # ---------- video upload (resumable) ----------
 @app.post("/upload")
 async def upload(
