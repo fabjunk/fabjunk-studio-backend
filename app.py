@@ -171,7 +171,7 @@ async def upload(
     if not data:
         raise HTTPException(status_code=400, detail="Empty video file")
 
-    async with httpx.AsyncClient(timeout=600) as c:
+async with httpx.AsyncClient(timeout=600) as c:
     # 1. start
     start_params = {
     "upload_phase": "start",
