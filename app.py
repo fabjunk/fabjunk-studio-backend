@@ -172,28 +172,28 @@ async def upload(
         raise HTTPException(status_code=400, detail="Empty video file")
 
     async with httpx.AsyncClient(timeout=600) as c:
-        # 1. start
-start_params = {
+    # 1. start
+    start_params = {
     "upload_phase": "start",
     "file_size": str(len(data)),
     "access_token": token,
-}
-if caption:
+    }
+    if caption:
     start_params["description"] = caption
-if scheduled_time:
+    if scheduled_time:
     start_params["published"] = "false"
     start_params["scheduled_publish_time"] = str(scheduled_time)
-r = await c.post(f"{GRAPH}/{page_id}/videos", params=start_params)
-if r.status_code != 200:
+    r = await c.post(f"{GRAPH}/{page_id}/videos", params=start_params)
+    if r.status_code != 200:
     raise HTTPException(status_code=502, detail=graph_error(r))
-video_id = r.json().get("video_id")
-if not video_id:
+    video_id = r.json().get("video_id")
+    if not video_id:
     raise HTTPException(status_code=502, detail="Upload start returned no video_id")
 
-# 2. transfer (chunked - Graph rejects oversized single chunks with 413)
-CHUNK = 8 * 1024 * 1024
-offset, size = 0, len(data)
-while offset < size:
+    # 2. transfer (chunked - Graph rejects oversized single chunks with 413)
+    CHUNK = 8 * 1024 * 1024
+    offset, size = 0, len(data)
+    while offset < size:
     piece = data[offset:offset + CHUNK]
     r = await c.post(
         f"{GRAPH}/{video_id}",
@@ -207,16 +207,16 @@ while offset < size:
     except (ValueError, TypeError, AttributeError):
         offset += len(piece)
 
-# 3. finish
-r = await c.post(
+    # 3. finish
+    r = await c.post(
     f"{GRAPH}/{video_id}",
     params={"upload_phase": "finish", "access_token": token},
-)
-if r.status_code != 200:
+    )
+    if r.status_code != 200:
     raise HTTPException(status_code=502, detail=graph_error(r))
 
-result = {"video_id": video_id, "reel_id": None}
-if as_reel.lower() == "true":
+    result = {"video_id": video_id, "reel_id": None}
+    if as_reel.lower() == "true":
     r = await c.post(
         f"{GRAPH}/{page_id}/video_reels",
         params={"video_id": video_id, "access_token": token},
@@ -225,7 +225,7 @@ if as_reel.lower() == "true":
         result["reel_id"] = r.json().get("id")
     else:
         result["reel_error"] = graph_error(r)
-return result
+    return result
 
 
 # ---------- photo post ----------
