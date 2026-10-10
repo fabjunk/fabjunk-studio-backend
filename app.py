@@ -281,7 +281,7 @@ async def reply(req: ReplyReq, x_api_key: Optional[str] = Header(None)):
     token = page_token(req.page_id) if req.page_id else any_token()
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(
-            f"{GRAPH}/{req.comment_id}/replies",
+            f"{GRAPH}/{req.comment_id}/comments",
             params={"message": req.message, "access_token": token},
         )
     if r.status_code != 200:
