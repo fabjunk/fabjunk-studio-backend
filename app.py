@@ -10,7 +10,7 @@ Env vars:
 """
 import json
 import os
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -294,36 +294,68 @@ async def delete_video(
     return {"deleted": True, "video_id": video_id}
 
 
-# ---------- photo post ----------
+# ---------- photo post (single image or carousel) ----------
 @app.post("/photo")
 async def photo(
     page_id: str = Form(...),
-    image: UploadFile = File(...),
     caption: str = Form(""),
     scheduled_time: Optional[int] = Form(None),
+    images: List[UploadFile] = File(...),
     x_api_key: Optional[str] = Header(None),
 ):
     check_key(x_api_key)
     token = page_token(page_id)
-    data = await image.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty image file")
-    ctype = image.content_type or "image/jpeg"
-    if not ctype.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File is not an image")
-    params = {"caption": caption, "access_token": token}
-    if scheduled_time:
-        params["published"] = "false"
-        params["scheduled_publish_time"] = str(scheduled_time)
+    if not images:
+        raise HTTPException(status_code=400, detail="No images provided")
+    if len(images) > 10:
+        raise HTTPException(status_code=400, detail="Max 10 images per carousel")
+    blobs = []
+    for img in images:
+        data = await img.read()
+        ctype = img.content_type or "image/jpeg"
+        if not data or not ctype.startswith("image/"):
+            raise HTTPException(status_code=400, detail=f"Bad image: {img.filename}")
+        blobs.append((img.filename or "photo.jpg", data, ctype))
+
     async with httpx.AsyncClient(timeout=120) as c:
-        r = await c.post(
-            f"{GRAPH}/{page_id}/photos",
-            params=params,
-            files={"source": ("photo.jpg", data, ctype)},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=graph_error(r))
-    return {"photo_id": r.json().get("id"), "post_id": r.json().get("post_id")}
+        if len(blobs) == 1:
+            # single photo post (supports scheduling)
+            fname, data, ctype = blobs[0]
+            params = {"caption": caption, "access_token": token}
+            if scheduled_time:
+                params["published"] = "false"
+                params["scheduled_publish_time"] = str(scheduled_time)
+            r = await c.post(
+                f"{GRAPH}/{page_id}/photos",
+                params=params,
+                files={"source": (fname, data, ctype)},
+            )
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=graph_error(r))
+            return {"photo_id": r.json().get("id"), "post_id": r.json().get("post_id")}
+
+        # carousel: upload each photo unpublished, then attach all to one feed post
+        fbids = []
+        for fname, data, ctype in blobs:
+            r = await c.post(
+                f"{GRAPH}/{page_id}/photos",
+                params={"published": "false", "access_token": token},
+                files={"source": (fname, data, ctype)},
+            )
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=graph_error(r))
+            fbids.append(r.json().get("id"))
+        feed_params = {"access_token": token, "message": caption}
+        for i, fbid in enumerate(fbids):
+            feed_params[f"attached_media[{i}]"] = json.dumps({"media_fbid": fbid})
+        if scheduled_time:
+            feed_params["published"] = "false"
+            feed_params["scheduled_publish_time"] = str(scheduled_time)
+        r = await c.post(f"{GRAPH}/{page_id}/feed", params=feed_params)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=graph_error(r))
+        return {"post_id": r.json().get("id"), "photos": fbids}
+
 
 # ---------- AI reply drafting ----------
 class DraftReq(BaseModel):
