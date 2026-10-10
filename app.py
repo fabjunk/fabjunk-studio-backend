@@ -190,14 +190,23 @@ async def upload(
         if not video_id:
             raise HTTPException(status_code=502, detail="Upload start returned no video_id")
 
-        # 2. transfer (single chunk)
-        r = await c.post(
-            f"{GRAPH}/{video_id}",
-            params={"upload_phase": "transfer", "start_offset": "0", "access_token": token},
-            files={"video_file_chunk": ("chunk.mp4", data, "video/mp4")},
-        )
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=graph_error(r))
+# 2. transfer (chunked — Graph rejects oversized single chunks with 413)
+CHUNK = 8 * 1024 * 1024
+offset, size = 0, len(data)
+while offset < size:
+    piece = data[offset:offset + CHUNK]
+    r = await c.post(
+        f"{GRAPH}/{video_id}",
+        params={"upload_phase": "transfer", "start_offset": str(offset), "access_token": token},
+        files={"video_file_chunk": ("chunk.mp4", piece, "video/mp4")},
+    )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=graph_error(r))
+    try:
+        offset = int(r.json().get("start_offset", offset + len(piece)))
+    except (ValueError, TypeError, AttributeError):
+        offset += len(piece)
+
 
         # 3. finish
         r = await c.post(
