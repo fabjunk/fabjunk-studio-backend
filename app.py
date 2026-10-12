@@ -177,34 +177,47 @@ async def upload(
 
 
 async def upload_video(page_id: str, token: str, data: bytes, caption: str, scheduled_time: Optional[int]):
-    """Regular feed video via the /videos resumable upload (chunked)."""
+    """Regular feed video via the /videos resumable upload (chunked).
+
+    Flow (per working production implementations):
+      1. POST /{page_id}/videos?upload_phase=start -> {upload_session_id, video_id}
+      2. POST /{page_id}/videos (multipart) with upload_phase=transfer,
+         upload_session_id, start_offset, and the chunk as `source`.
+         Repeat per chunk; advance offset from response.
+      3. POST /{page_id}/videos?upload_phase=finish&upload_session_id=...
+         with description / scheduling params.
+    """
     async with httpx.AsyncClient(timeout=600) as c:
         # 1. start
-        start_params = {
-            "upload_phase": "start",
-            "file_size": str(len(data)),
-            "access_token": token,
-        }
-        if caption:
-            start_params["description"] = caption
-        if scheduled_time:
-            start_params["published"] = "false"
-            start_params["scheduled_publish_time"] = str(scheduled_time)
-        r = await c.post(f"{GRAPH}/{page_id}/videos", params=start_params)
+        r = await c.post(
+            f"{GRAPH}/{page_id}/videos",
+            params={
+                "upload_phase": "start",
+                "file_size": str(len(data)),
+                "access_token": token,
+            },
+        )
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=graph_error(r))
-        video_id = r.json().get("video_id")
-        if not video_id:
-            raise HTTPException(status_code=502, detail="Upload start returned no video_id")
+        j = r.json()
+        session_id = j.get("upload_session_id")
+        video_id = j.get("video_id")
+        if not session_id:
+            raise HTTPException(status_code=502, detail="Upload start returned no upload_session_id")
 
-        # 2. transfer (chunked - Graph rejects oversized single chunks with 413)
+        # 2. transfer chunks (multipart to /{page_id}/videos)
         CHUNK = 8 * 1024 * 1024
         offset, size = 0, len(data)
         while offset < size:
             piece = data[offset:offset + CHUNK]
             r = await c.post(
-                f"{GRAPH}/{video_id}",
-                data={"upload_phase": "transfer", "start_offset": str(offset), "access_token": token},
+                f"{GRAPH}/{page_id}/videos",
+                data={
+                    "upload_phase": "transfer",
+                    "upload_session_id": session_id,
+                    "start_offset": str(offset),
+                    "access_token": token,
+                },
                 files={"source": ("chunk.mp4", piece, "video/mp4")},
             )
             if r.status_code != 200:
@@ -214,14 +227,21 @@ async def upload_video(page_id: str, token: str, data: bytes, caption: str, sche
             except (ValueError, TypeError, AttributeError):
                 offset += len(piece)
 
-        # 3. finish
-        r = await c.post(
-            f"{GRAPH}/{video_id}",
-            params={"upload_phase": "finish", "access_token": token},
-        )
+        # 3. finish (description + scheduling go here)
+        finish_params = {
+            "upload_phase": "finish",
+            "upload_session_id": session_id,
+            "access_token": token,
+        }
+        if caption:
+            finish_params["description"] = caption
+        if scheduled_time:
+            finish_params["published"] = "false"
+            finish_params["scheduled_publish_time"] = str(scheduled_time)
+        r = await c.post(f"{GRAPH}/{page_id}/videos", params=finish_params)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=graph_error(r))
-        return {"video_id": video_id}
+        return {"video_id": video_id or r.json().get("video_id")}
 
 
 async def upload_reel(page_id: str, token: str, data: bytes, caption: str, scheduled_time: Optional[int]):
