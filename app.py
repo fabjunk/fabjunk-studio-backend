@@ -204,7 +204,7 @@ async def upload_video(page_id: str, token: str, data: bytes, caption: str, sche
             piece = data[offset:offset + CHUNK]
             r = await c.post(
                 f"{GRAPH}/{video_id}",
-                params={"upload_phase": "transfer", "start_offset": str(offset), "access_token": token},
+                data={"upload_phase": "transfer", "start_offset": str(offset), "access_token": token},
                 files={"source": ("chunk.mp4", piece, "video/mp4")},
             )
             if r.status_code != 200:
@@ -221,20 +221,7 @@ async def upload_video(page_id: str, token: str, data: bytes, caption: str, sche
         )
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=graph_error(r))
-
-        # 4. schedule explicitly (start-phase scheduling is unreliable)
-        if scheduled_time:
-            r = await c.post(
-                f"{GRAPH}/{video_id}",
-                params={
-                    "scheduled_publish_time": str(scheduled_time),
-                    "published": "false",
-                    "access_token": token,
-                },
-            )
-            if r.status_code != 200:
-                raise HTTPException(status_code=502, detail=graph_error(r))
-        return {"video_id": video_id, "scheduled": bool(scheduled_time)}
+        return {"video_id": video_id}
 
 
 async def upload_reel(page_id: str, token: str, data: bytes, caption: str, scheduled_time: Optional[int]):
